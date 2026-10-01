@@ -41,3 +41,18 @@ CREATE TABLE rate_limit_events (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX idx_rate_limit_ip_time ON rate_limit_events(ip_address, created_at);
+
+ALTER TABLE widgets ADD COLUMN IF NOT EXISTS allowed_origins JSONB NOT NULL DEFAULT '[]';
+
+CREATE TABLE IF NOT EXISTS jobs (
+  id SERIAL PRIMARY KEY,
+  type TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'done', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  last_error TEXT,
+  run_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status_run_at ON jobs(status, run_at);
