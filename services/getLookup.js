@@ -1,4 +1,3 @@
-// services/geoLookup.js
 async function fetchWithTimeout(url, ms) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), ms);
