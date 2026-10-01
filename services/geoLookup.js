@@ -9,7 +9,7 @@ async function fetchWithTimeout(url, ms) {
   }
 }
 
-async function tryProviderA(ip) {
+async function tryProviderA(ip){
   const res = await fetchWithTimeout(`http://ip-api.com/json/${ip}`, 3000);
   if (!res.ok) throw new Error(`provider_a status ${res.status}`);
   const data = await res.json();
