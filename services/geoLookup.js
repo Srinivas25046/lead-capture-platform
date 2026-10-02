@@ -4,7 +4,7 @@ async function fetchWithTimeout(url, ms) {
   try {
     const res = await fetch(url, { signal: controller.signal });
     return res;
-  } finally {
+  } finally{
     clearTimeout(timeoutId);
   }
 }
