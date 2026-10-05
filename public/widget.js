@@ -73,6 +73,6 @@
         });
     });
 
-    document.currentScript.parentNode.insertBefore(container, document.currentScript);
+    script.parentNode.insertBefore(container, script);
   }
 })();

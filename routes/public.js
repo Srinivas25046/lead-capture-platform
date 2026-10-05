@@ -19,6 +19,7 @@ router.get('/widgets/:id/config', widgetCors, (req, res) => {
   });
 });
 
+router.options('/submissions', widgetCors);
 router.post('/submissions', widgetCors, async (req, res) => {
   const ipAddress = req.ip;
   const widget = req.widget;
