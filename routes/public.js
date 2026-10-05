@@ -8,6 +8,7 @@ const { enqueueJob } = require('../services/jobs');
 const pool = require('../db/pool');
 
 router.get('/widgets/:id/config', widgetCors, (req, res) => {
+  res.set('Cache-Control', 'public, max-age=60');
   res.json({
     id: req.widget.id,
     type: req.widget.type,
