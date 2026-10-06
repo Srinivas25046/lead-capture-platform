@@ -2,6 +2,7 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 const path = require('path');
+app.use(require('./routes/dashboard'));
 
 const WIDGET_VERSION = 'v1';
 
