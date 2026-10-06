@@ -26,16 +26,26 @@ async function tryProviderB(ip) {
 }
 
 async function lookupGeo(ip) {
-  try {
-    return await tryProviderA(ip);
-  } catch (errA) {
-    console.log(`Geo provider A failed (${errA.message}), trying provider B`);
+  if (process.env.GEO_PROVIDER_A_DISABLED === 'true') {
+    console.log('Geo provider A manually disabled, skipping to provider B');
+  } else {
     try {
-      return await tryProviderB(ip);
-    } catch (errB) {
-      console.log(`Geo provider B also failed (${errB.message}) — continuing without geo data`);
-      return { country: null, city: null, provider: null };
+      return await tryProviderA(ip);
+    } catch (errA) {
+      console.log(`Geo provider A failed (${errA.message}), trying provider B`);
     }
+  }
+
+  if (process.env.GEO_PROVIDER_B_DISABLED === 'true') {
+    console.log('Geo provider B manually disabled — continuing without geo data');
+    return { country: null, city: null, provider: null };
+  }
+
+  try {
+    return await tryProviderB(ip);
+  } catch (errB) {
+    console.log(`Geo provider B also failed (${errB.message}) — continuing without geo data`);
+    return { country: null, city: null, provider: null };
   }
 }
 
