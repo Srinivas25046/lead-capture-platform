@@ -1,0 +1,11 @@
+run: docker compose up
+seed: docker compose exec api node seed.js
+base_url: http://localhost:3000
+endpoints:
+  - GET /health
+  - POST /tenants
+  - POST /widgets
+  - GET /widgets/:id/config
+  - POST /submissions
+  - GET /dashboard/stats
+  - GET /widget.js
