@@ -8,6 +8,7 @@ async function widgetCors(req, res, next) {
       res.header('Access-Control-Allow-Origin', origin);
       res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
       res.header('Access-Control-Allow-Headers', 'Content-Type');
+      res.header('Access-Control-Max-Age', '600');
     }
     return res.sendStatus(204);
   }
@@ -17,6 +18,9 @@ async function widgetCors(req, res, next) {
   if (!widgetId) {
     return res.status(400).json({ error: 'widget_id is required' });
   }
+  if (!/^\d+$/.test(String(widgetId))) {
+    return res.status(400).json({ error: 'widget_id must be a number' });
+  }
 
   const widget = await getWidgetById(widgetId);
   if (!widget) {
@@ -24,9 +28,9 @@ async function widgetCors(req, res, next) {
   }
 
   const allowedOrigins = widget.allowed_origins || [];
-  const isAllowed = allowedOrigins.includes(origin);
+  const isAllowed = Boolean(origin) && allowedOrigins.includes(origin);
 
-  if (origin && isAllowed) {
+  if (isAllowed) {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type');

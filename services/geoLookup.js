@@ -2,14 +2,17 @@ async function fetchWithTimeout(url, ms) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), ms);
   try {
-    const res = await fetch(url, { signal: controller.signal });
-    return res;
-  } finally{
+    return await fetch(url, { signal: controller.signal });
+  } finally {
     clearTimeout(timeoutId);
   }
 }
 
-async function tryProviderA(ip){
+async function tryProviderA(ip) {
+  if (process.env.GEO_MOCK === 'true') {
+    return { country: 'Mockland', city: 'Mocktown', provider: 'provider_a' };
+  }
+
   const res = await fetchWithTimeout(`http://ip-api.com/json/${ip}`, 3000);
   if (!res.ok) throw new Error(`provider_a status ${res.status}`);
   const data = await res.json();
@@ -18,6 +21,10 @@ async function tryProviderA(ip){
 }
 
 async function tryProviderB(ip) {
+  if (process.env.GEO_MOCK === 'true') {
+    return { country: 'Mockland', city: 'Mocktown', provider: 'provider_b' };
+  }
+
   const res = await fetchWithTimeout(`https://ipapi.co/${ip}/json/`, 3000);
   if (!res.ok) throw new Error(`provider_b status ${res.status}`);
   const data = await res.json();
@@ -25,7 +32,9 @@ async function tryProviderB(ip) {
   return { country: data.country_name, city: data.city, provider: 'provider_b' };
 }
 
-async function lookupGeo(ip) {
+async function lookupGeo(rawIp) {
+  const ip = String(rawIp || '').replace(/^::ffff:/, ''); // strip the IPv4-in-IPv6 prefix
+
   if (process.env.GEO_PROVIDER_A_DISABLED === 'true') {
     console.log('Geo provider A manually disabled, skipping to provider B');
   } else {

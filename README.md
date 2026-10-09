@@ -1,104 +1,122 @@
 # Lead Capture Platform
 
-Lets a customer create an embeddable form widget and install it on any website with one `<script>` tag. Submissions are validated, rate-limited, checked for spam via a honeypot field, enriched with geolocation (via a two-provider fallback chain), stored, and shown back to the widget owner in a dashboard.
+A backend for an embeddable lead-capture widget. A customer (tenant) creates a form widget, pastes one `<script>` tag into any website, and visitors' submissions flow back to a hardened API: validated, rate-limited, spam-checked, enriched with geolocation through a two-provider fallback chain, stored per tenant, and summarised in a dashboard.
+
+The requests come from browsers on origins this service does not control, so most of the engineering is in CORS, abuse protection, tenant isolation and graceful degradation.
 
 ## Architecture
 
 ```
-Widget Owner (authenticated, X-API-Key header)
-  -> POST /tenants        create an account, get an API key (shown once)
-  -> POST /widgets        create a widget (tenant-scoped)
-  -> GET  /widgets        list this tenant's widgets
-  -> GET  /dashboard/stats  aggregated, tenant-scoped submission stats
+Widget owner (authenticated with X-API-Key)
+  POST   /tenants               create an account, receive an API key (shown once)
+  POST   /widgets               create a widget, receive its embed snippet
+  GET    /widgets, /widgets/:id read widgets (this tenant only)
+  PUT    /widgets/:id           update a widget
+  DELETE /widgets/:id           delete a widget
+  GET    /dashboard/stats       tenant-scoped submission stats
 
-Customer Website (any origin, embeds the widget)
-  <script src="widget.js?id=123">
-    -> GET /widgets/:id/config   (public, CORS, short-lived cache)
-    -> renders a form client-side
+Customer website (any origin)
+  <script src=".../widget.js?id=1&v=2">
+    GET /widget.js                public, versioned, 1-year immutable cache
+    GET /widgets/:id/config       public, CORS-checked, 60-second cache
+    renders the form in the page
 
-Website Visitor
-  -> POST /submissions  (public, CORS, per-widget allowed_origins check)
-     | OPTIONS preflight handled explicitly (no body on preflight)
-     | rate limit check (10 submissions / IP / widget / minute) -> 429 if exceeded
-     | required-field validation -> 400 if missing
-     | honeypot check -> flagged, not silently dropped, but excluded from dashboard counts
-     | geo enrichment: provider A (ip-api.com) -> fail -> provider B (ipapi.co) -> fail -> store anyway, geo fields null
-     | store submission (tenant_id denormalized for one-column isolation)
-     | enqueue confirmation-email background job (never awaited inline)
+Visitor
+  POST /submissions  (public)
+    1. OPTIONS preflight answered by an explicit OPTIONS route
+    2. origin checked against this widget's allowed_origins   -> 403 if not listed
+    3. per-IP, per-widget rate limit (10 per minute)           -> 429 if exceeded
+    4. payload validated (size, JSON, required fields)         -> 400 / 413
+    5. honeypot field checked                                  -> stored with spam_flag = true
+    6. geo enrichment: provider A -> provider B -> store anyway with null geo
+    7. submission stored (tenant_id denormalised for isolation)
+    8. confirmation email queued as a background job, never awaited
 
-Background Worker (separate process, services/jobs.js + worker.js)
-  -> polls the jobs table (FOR UPDATE SKIP LOCKED, safe for multiple workers)
-  -> retries failed jobs with backoff (1s, 5s, 15s), up to 3 attempts
-  -> logs "ALERT:" on permanent failure after 3 attempts
+Background worker (separate container)
+  polls the jobs table with FOR UPDATE SKIP LOCKED
+  retries failures with backoff (1s, 5s, 15s), 3 attempts
+  logs "ALERT:" and marks the job failed after the third failure
 ```
+
+Stack: Node.js 22, Express 5, PostgreSQL 16, Docker Compose.
 
 ## Setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/lead-capture-platform.git
+git clone https://github.com/Srinivas25046/lead-capture-platform.git
 cd lead-capture-platform
 cp .env.example .env
 docker compose up --build
 ```
 
-Seed demo data (in a second terminal):
+On Windows PowerShell, use `Copy-Item .env.example .env` instead of `cp`.
+
+In a second terminal, create the tables and seed demo data:
+
 ```bash
+docker compose exec api node db/migrate.js
 docker compose exec api node seed.js
 ```
-This prints a tenant API key and a widget id — use both in the examples below.
 
-## Try it live
+`seed.js` prints a tenant API key and a widget id. Keep both. The migration is idempotent, so running it twice is safe.
 
-In a separate, sibling folder (not inside this repo):
+## Try the widget on a second origin
+
 ```bash
-mkdir customer-site && cd customer-site
-```
-Create `index.html`:
-```html
-<!DOCTYPE html>
-<html>
-<head><title>A customer's website</title></head>
-<body>
-  <h1>Welcome to Acme Corp's homepage</h1>
-  <script src="http://localhost:3000/widget.js?id=1"></script>
-</body>
-</html>
-```
-Serve it on a different port than the API:
-```bash
+cd customer-site
 npx serve -p 5500
 ```
-Open `http://localhost:5500` — the widget renders and accepts a real submission, from a genuinely different origin than the API.
+
+Open `http://localhost:5500`. The page is served from port 5500 while the API runs on port 3000, so the widget loads and submits across origins. The seed script allows `http://localhost:5500` as an origin for the demo widget.
+
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Postgres connection string. Compose sets it for the containers. |
+| `PUBLIC_BASE_URL` | Base URL used when generating embed snippets |
+| `GEO_PROVIDER_A_DISABLED` | `true` forces provider A to be skipped (for proving the fallback) |
+| `GEO_PROVIDER_B_DISABLED` | `true` forces provider B to be skipped |
+| `GEO_MOCK` | `true` replaces both live geo APIs with deterministic mock answers |
 
 ## API reference
 
-| Method | Path | Auth | Request body | Response |
+| Method | Path | Auth | Success | Failure responses |
 |---|---|---|---|---|
-| POST | `/tenants` | None | `{ "name": string }` | `201` `{ id, name, api_key }` — key shown once |
-| POST | `/widgets` | `X-API-Key` | `{ type, title, fields, allowed_origins }` | `201` widget object |
-| GET | `/widgets` | `X-API-Key` | — | `200` array of this tenant's widgets |
-| GET | `/widgets/:id` | `X-API-Key` | — | `200` widget, or `404` if not owned by this tenant |
-| GET | `/widgets/:id/config` | None (CORS) | — | `200` public widget config |
-| POST | `/submissions` | None (CORS) | `{ widget_id, data: {...} }` | `201` `{ id, status }`, `400`/`403`/`429` on failure |
-| GET | `/dashboard/stats` | `X-API-Key` | — | `200` `{ total_submissions, per_widget, by_country }` |
-| GET | `/widget.js` | None | — | the embeddable script, 1-year immutable cache |
-| GET | `/health` | None | — | `200` `{ status: "ok" }` |
+| POST | `/tenants` | none | `201` `{ id, name, api_key }` | `400` |
+| POST | `/widgets` | `X-API-Key` | `201` widget plus `embed_snippet` | `400`, `401` |
+| GET | `/widgets` | `X-API-Key` | `200` array | `401` |
+| GET | `/widgets/:id` | `X-API-Key` | `200` widget | `401`, `404` (also for another tenant's widget) |
+| PUT | `/widgets/:id` | `X-API-Key` | `200` widget | `400`, `401`, `404` |
+| DELETE | `/widgets/:id` | `X-API-Key` | `204` | `401`, `404` |
+| GET | `/widgets/:id/config` | none, CORS | `200` public config | `403`, `404` |
+| POST | `/submissions` | none, CORS | `201` `{ id, status }` | `400`, `403`, `404`, `413`, `429` |
+| GET | `/dashboard/stats` | `X-API-Key` | `200` `{ total_submissions, per_widget, by_country }` | `401` |
+| GET | `/widget.js` | none | `200` script | n/a |
+| GET | `/health` | none | `200` | n/a |
 
-## Design decisions worth knowing
+Errors are always JSON, including malformed bodies (`400`) and oversized bodies (`413`, limit 10kb).
 
-- **API key auth, not OAuth/Supabase**: the hard parts of this capstone are CORS, rate limiting, and resilience — not auth architecture, so a simple hashed-API-key-per-tenant scheme keeps the surface area focused on what's actually being graded.
-- **`tenant_id` is denormalized onto `submissions`** even though it's reachable via a join through `widgets`. Every tenant-scoped query can filter with one `WHERE tenant_id = $1`, rather than depending on a correct join every time.
-- **Background jobs use a Postgres table + `FOR UPDATE SKIP LOCKED`**, not Redis/Bull. This is a deliberate choice to avoid new infrastructure, since Postgres was already required — and it genuinely supports multiple concurrent workers safely.
-- **OPTIONS preflight is routed explicitly**, separate from the POST handler. Express treats `OPTIONS /submissions` and `POST /submissions` as entirely different routes; without an explicit `router.options(...)` entry, the preflight gets no matching route at all and the browser blocks the real request before it's ever sent. This cost real debugging time and is documented in `BUILDLOG.md`.
-- **Geo providers are given independent on/off toggles** (`GEO_PROVIDER_A_DISABLED`, `GEO_PROVIDER_B_DISABLED`) specifically so the fallback chain can be proven deterministically, rather than hoping a free API happens to be down during review.
+## Design decisions
+
+- **Simple API-key auth.** Tenants get a random key shown once and stored as a SHA-256 hash. The hard parts of this system are CORS, abuse protection and resilience, so the auth scheme stays small.
+- **`tenant_id` on `submissions`.** It is duplicated from the widget on purpose, so every tenant query can filter with a single `WHERE tenant_id = $1` rather than depending on a correct join.
+- **Preflight needs its own route.** Express treats `OPTIONS /submissions` and `POST /submissions` as different routes, and a preflight carries no body, so the widget cannot be looked up from it. The middleware answers preflights first and does the strict per-widget origin check on the real request.
+- **Postgres-backed job queue.** `FOR UPDATE SKIP LOCKED` lets several workers pull jobs safely with no extra infrastructure.
+- **Two cache lifetimes.** `widget.js` is immutable for a year and versioned by a query parameter. The config can change at any time, so it caches for 60 seconds.
+- **Identical visitor response for spam.** A bot that fills the honeypot gets the same success message as a person, so it learns nothing.
 
 ## Limitations
 
-- The honeypot check stores flagged submissions (`spam_flag = true`) rather than silently dropping them entirely — this keeps a record for manual review, at the cost of slightly more storage than a pure "drop" approach. Flagged submissions are excluded from all dashboard counts.
-- Geo providers are free-tier (ip-api.com, ipapi.co) with real rate limits — during development, `ipapi.co`'s free tier was genuinely exhausted by repeated testing, which is itself documented as live evidence of the fallback chain surviving a real (not simulated) third-party failure. See `EVIDENCE.md`.
-- Email sending is a console-log stub (`worker.js`), not a real provider integration — swapping in a real provider (SendGrid, SES) would only require changing the body of `sendConfirmationEmail`, not the job queue or retry logic around it.
-- No visual widget-builder UI, CDN deployment, or support for more than three widget types — explicitly out of scope per the design doc's non-goal.
+- Flagged (honeypot) submissions are stored with `spam_flag = true` and excluded from dashboard counts, rather than being dropped entirely. This keeps a record for review at the cost of some storage.
+- The two geo providers are free tiers (ip-api.com and ipapi.co). During testing ipapi.co returned `429 RateLimited` for a long stretch, which is why a deterministic mock mode exists.
+- Confirmation email is a console-log stub in `worker.js`. It simulates a 30% failure rate so the retry path can be exercised.
+- Rate limiting counts rows in Postgres. That is correct but would not scale to very high traffic without a faster store.
+- No visual widget builder, CDN or custom domains. These are out of scope, as stated in `DESIGN.md`.
 
-## What I'd fix with another day
+## Repository documents
 
-[Fill in honestly once the project is fully done — e.g. a cleaner admin UI for the dashboard instead of raw JSON, or capturing more geo providers to reduce dependence on free-tier rate limits.]
+- `DESIGN.md` – the one-page design (problem, data model, API surface, layers, non-goal)
+- `EVIDENCE.md` – one proof per requirement
+- `BUILDLOG.md` – where AI helped, where it was wrong, what changed
+- `capstone.yaml` – run and seed commands and endpoints for review
