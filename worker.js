@@ -1,13 +1,20 @@
 const pool = require('./db/pool');
 
-const BACKOFF_MS = [1000, 5000, 15000]; // 1s, 5s, 15s between retries
+const BACKOFF_MS = [1000, 5000, 15000]; // wait before retry 1, 2, 3
 
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// The "email" is a console-log stub. Failure can be forced from the environment:
+//   EMAIL_FORCE_FAIL=true   -> every attempt throws (proves a failing side effect never blocks a submission)
+//   EMAIL_FAIL_RATE=0.3     -> random failures, to exercise the retry path
 async function sendConfirmationEmail(payload) {
-  // Stub: no real email provider wired up. In a real system this calls SendGrid/SES/etc.
   console.log(`[EMAIL] Would send confirmation to ${payload.email} for widget ${payload.widgetId}`);
 
-  // Simulate occasional failure for testing the retry path — remove this in a real system
-  if (Math.random() < 0.3) {
+  if (process.env.EMAIL_FORCE_FAIL === 'true') {
+    throw new Error('Email failure forced by EMAIL_FORCE_FAIL');
+  }
+  const failRate = Number(process.env.EMAIL_FAIL_RATE || 0);
+  if (Math.random() < failRate) {
     throw new Error('Simulated email provider failure');
   }
 }
@@ -17,10 +24,15 @@ const HANDLERS = {
 };
 
 async function processNextJob() {
+  // SKIP LOCKED lets several workers pull jobs safely without grabbing the same row
   const result = await pool.query(
     `UPDATE jobs SET status = 'processing'
      WHERE id = (
-       SELECT id FROM jobs WHERE status = 'pending' AND run_at <= now() ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED
+       SELECT id FROM jobs
+       WHERE status = 'pending' AND run_at <= now()
+       ORDER BY id
+       LIMIT 1
+       FOR UPDATE SKIP LOCKED
      )
      RETURNING *`
   );
@@ -60,8 +72,16 @@ async function processNextJob() {
 async function runWorker() {
   console.log('Worker started, polling for jobs...');
   while (true) {
-    const didWork = await processNextJob();
-    await new Promise(resolve => setTimeout(resolve, didWork ? 100 : 1000));
+    let didWork = false;
+    try {
+      didWork = await processNextJob();
+    } catch (err) {
+      // e.g. the database or the tables are not ready yet: log, wait, keep going
+      console.error('Worker poll failed, will retry:', err.code || err.message);
+      await sleep(3000);
+      continue;
+    }
+    await sleep(didWork ? 100 : 1000);
   }
 }
 

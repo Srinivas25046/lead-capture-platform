@@ -2,23 +2,31 @@ services:
   api:
     build: .
     ports: ["3000:3000"]
-    env_file: .env
     environment:
       DATABASE_URL: postgres://postgres:dev@db:5432/widgets
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
+      GEO_PROVIDER_A_DISABLED: ${GEO_PROVIDER_A_DISABLED:-false}
+      GEO_PROVIDER_B_DISABLED: ${GEO_PROVIDER_B_DISABLED:-false}
+      GEO_MOCK: ${GEO_MOCK:-false}
     depends_on: [db]
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: node worker.js
+    environment:
+      DATABASE_URL: postgres://postgres:dev@db:5432/widgets
+      EMAIL_FORCE_FAIL: ${EMAIL_FORCE_FAIL:-false}
+      EMAIL_FAIL_RATE: ${EMAIL_FAIL_RATE:-0}
+    depends_on: [db]
+    restart: unless-stopped
+
   db:
     image: postgres:16
     environment:
       POSTGRES_PASSWORD: dev
       POSTGRES_DB: widgets
     volumes: [widgetdata:/var/lib/postgresql/data]
-  worker:
-    build: .
-    env_file: .env
-    environment:
-      DATABASE_URL: postgres://postgres:dev@db:5432/widgets
-    depends_on: [db]
-    command: node worker.js
 
 volumes:
   widgetdata:
